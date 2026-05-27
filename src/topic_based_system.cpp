@@ -149,7 +149,10 @@ CallbackReturn TopicBasedSystem::on_init(const hardware_interface::HardwareInfo&
       get_hardware_parameter("joint_commands_topic", "/robot_joint_commands"), rclcpp::QoS(1));
   topic_based_joint_states_subscriber_ = node_->create_subscription<sensor_msgs::msg::JointState>(
       get_hardware_parameter("joint_states_topic", "/robot_joint_states"), rclcpp::SensorDataQoS(),
-      [this](const sensor_msgs::msg::JointState::SharedPtr joint_state) { latest_joint_state_ = *joint_state; });
+      [this](const sensor_msgs::msg::JointState::SharedPtr joint_state) {
+        std::lock_guard<std::mutex> lock(latest_joint_state_mutex_);
+        latest_joint_state_ = *joint_state;
+      });
 
   // if the values on the `joint_states_topic` are wrapped between -2*pi and 2*pi (like they are in Isaac Sim)
   // sum the total joint rotation returned on the `joint_states_` interface
@@ -209,30 +212,39 @@ hardware_interface::return_type TopicBasedSystem::read(const rclcpp::Time& /*tim
     rclcpp::spin_some(node_);
   }
 
-  for (std::size_t i = 0; i < latest_joint_state_.name.size(); ++i)
+  sensor_msgs::msg::JointState latest;
+  {
+    std::lock_guard<std::mutex> lock(latest_joint_state_mutex_);
+    latest = latest_joint_state_;
+  }
+
+  for (std::size_t i = 0; i < latest.name.size(); ++i)
   {
     const auto& joints = info_.joints;
     auto it = std::find_if(joints.begin(), joints.end(),
-                           [&joint_name = std::as_const(latest_joint_state_.name[i])](
+                           [&joint_name = std::as_const(latest.name[i])](
                                const hardware_interface::ComponentInfo& info) { return joint_name == info.name; });
     if (it != joints.end())
     {
       auto j = static_cast<std::size_t>(std::distance(joints.begin(), it));
-      if (sum_wrapped_joint_states_)
+      if (i < latest.position.size())
       {
-        sumRotationFromMinus2PiTo2Pi(latest_joint_state_.position[i], joint_states_[POSITION_INTERFACE_INDEX][j]);
+        if (sum_wrapped_joint_states_)
+        {
+          sumRotationFromMinus2PiTo2Pi(latest.position[i], joint_states_[POSITION_INTERFACE_INDEX][j]);
+        }
+        else
+        {
+          joint_states_[POSITION_INTERFACE_INDEX][j] = latest.position[i];
+        }
       }
-      else
+      if (i < latest.velocity.size())
       {
-        joint_states_[POSITION_INTERFACE_INDEX][j] = latest_joint_state_.position[i];
+        joint_states_[VELOCITY_INTERFACE_INDEX][j] = latest.velocity[i];
       }
-      if (!latest_joint_state_.velocity.empty())
+      if (i < latest.effort.size())
       {
-        joint_states_[VELOCITY_INTERFACE_INDEX][j] = latest_joint_state_.velocity[i];
-      }
-      if (!latest_joint_state_.effort.empty())
-      {
-        joint_states_[EFFORT_INTERFACE_INDEX][j] = latest_joint_state_.effort[i];
+        joint_states_[EFFORT_INTERFACE_INDEX][j] = latest.effort[i];
       }
     }
   }

@@ -34,6 +34,7 @@
 
 // C++
 #include <memory>
+#include <mutex>
 #include <string>
 
 // ROS
@@ -70,6 +71,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr topic_based_joint_commands_publisher_;
   rclcpp::Node::SharedPtr node_;
   sensor_msgs::msg::JointState latest_joint_state_;
+  std::mutex latest_joint_state_mutex_;
   bool sum_wrapped_joint_states_{ false };
 
   /// Use standard interfaces for joints because they are relevant for dynamic behavior
